@@ -295,49 +295,45 @@ function GUI:UpdateTradeSkills()
 --1- -Class Skills
 --2- spec1
 --3- spec2
---4- spec3
---5- - Professions
---6- prof1
---7- prof2
---8- - Secondary Skills
---9- Cooking
---10- First Aid
---11- Fishing
---12- Riding
+-- More robust profession detection for 3.3.5 (Stormforge, etc.)
+    -- Instead of assuming fixed indices (5–12), walk the entire skill list
+    -- and find the "Professions" / "Secondary Skills" headers and their children.
 
-	local skillName, header
-	local tradeSkill1, tradeSkill2, cook, firstAid
+    local tradeSkill1, tradeSkill2, cook, firstAid
+    local primaryIndices = {}
+    local numSkills = GetNumSkillLines()
 
-	for i = 5, 8 do
-		skillName = GetSkillLineInfo(i)
-		if  skillName == "Professions" then --TRADE_SKILLS ) then
-			tradeSkill1, header = GetSkillLineInfo(i + 1);
-			if header or not GetSpellInfo(tradeSkill1) then
-				tradeSkill1 = nil
-			else
-				tradeSkill1=i+1
-			end
+    for i = 1, numSkills do
+        local name, isHeader = GetSkillLineInfo(i)
 
-			tradeSkill2, header = GetSkillLineInfo(i + 2);
-			if header or not GetSpellInfo(tradeSkill2) then
-				tradeSkill2 = nil
-			else
-				tradeSkill2=i+2
-			end
-			break
-		end
-	end
-	
-	
-	for i = 5, 10 do
-		skillName = GetSkillLineInfo(i)
-		if  skillName == "Cooking" then
-			cook = i
-		elseif skillName == "First Aid" then
-			firstAid = i
-			break
-		end	
-	end
+        -- Primary professions block
+        if name == "Professions" and isHeader then
+            local j = i + 1
+            while j <= numSkills do
+                local n, isH = GetSkillLineInfo(j)
+                if not n or isH then break end   -- next header or end
+                table.insert(primaryIndices, j)
+                j = j + 1
+            end
+
+        -- Secondary skills block (Cooking / First Aid etc.)
+        elseif name == "Secondary Skills" and isHeader then
+            local j = i + 1
+            while j <= numSkills do
+                local n, isH = GetSkillLineInfo(j)
+                if not n or isH then break end
+                if n == "Cooking" then
+                    cook = j
+                elseif n == "First Aid" then
+                    firstAid = j
+                end
+                j = j + 1
+            end
+        end
+    end
+
+    tradeSkill1 = primaryIndices[1]
+    tradeSkill2 = primaryIndices[2]
 
 	local playerName = UnitName("player")
 

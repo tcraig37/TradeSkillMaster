@@ -1,5 +1,7 @@
 Whitemane Frostmourne Edit according to https://github.com/gamefreedomgit/Frostmourne/issues/1511#issuecomment-2308924985
 
+CraftingGUI Fix by Discord:shieldson (324977420857901066) https://discord.com/channels/859389663957352468/1412851228186247208/1439515108106571797
+
 # TSM v2.8.3
 Backport of [TradeSkillMaster](https://www.tradeskillmaster.com/) for 3.3.5a
 
