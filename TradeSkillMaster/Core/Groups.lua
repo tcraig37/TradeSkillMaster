@@ -364,7 +364,7 @@ function TSMAPI:DrawOperationManagement(TSMObj, container, operationName)
 
 	local playerList = {}
 	local factionrealmKey = TSM.db.keys.factionrealm
-	for playerName in pairs(TSM.db.factionrealm.characters) do
+	for playerName in pairs(TSM.db.realm.characters) do
 		playerList[playerName.." - "..factionrealmKey] = playerName
 	end
 	

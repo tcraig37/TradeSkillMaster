@@ -1,3 +1,6 @@
+v2.3.1
+*Changed factionrealm variables to realm to allow cross faction on Chromiecraft to be seamless.
+
 v2.3
 *Accounting will now automatically trim old sales / purchases if the data is too larger for WoW to handle without corrupting the saved variables.
 *Added a message which will be displayed upon logging in when sales / purchases were previous trimmed.
