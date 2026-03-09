@@ -105,6 +105,11 @@ function private:LoadHelpPage(parent)
 						},
 						{
 							type = "Label",
+							text = "Modified by Lugsta for Chromiecraft cross-faction support.",
+							relativeWidth = 1,
+						},
+						{
+							type = "Label",
 							text = TSMAPI.Design:ColorText(L["Application and Addon Developer:"], "link") .. " Bart39 [EU-Darkspear(A)]",
 							relativeWidth = 1,
 						},
