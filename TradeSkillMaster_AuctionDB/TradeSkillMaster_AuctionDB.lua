@@ -33,6 +33,12 @@ local savedDBDefaults = {
 		hidePoorQualityItems = true,
 		marketValueTooltip = true,
 		minBuyoutTooltip = true,
+		predictedPriceTooltip = false,
+		trendTooltip = false,
+		volatilityTooltip = false,
+		confidenceTooltip = false,
+		weekdayTooltip = false,
+		smartPriceTooltip = false,
 		showAHTab = true,
 		disableGetAll = false,
 	},
@@ -61,6 +67,12 @@ function TSM:RegisterModule()
 	TSM.priceSources = {
 		{ key = "DBMarket", label = L["AuctionDB - Market Value"], callback = "GetMarketValue" },
 		{ key = "DBMinBuyout", label = L["AuctionDB - Minimum Buyout"], callback = "GetMinBuyout" },
+		{ key = "DBPredicted", label = L["AuctionDB - Predicted Price"], callback = "GetPredictedPrice" },
+		{ key = "DBTrend", label = L["AuctionDB - Trend (per day)"], callback = "GetTrendValue" },
+		{ key = "DBVolatility", label = L["AuctionDB - Volatility"], callback = "GetVolatilityValue" },
+		{ key = "DBConfidence", label = L["AuctionDB - Confidence"], callback = "GetConfidenceValue" },
+		{ key = "DBWeekday", label = L["AuctionDB - Weekday Price"], callback = "GetWeekdayValue" },
+		{ key = "DBSmartPrice", label = L["AuctionDB - Smart Price"], callback = "GetSmartPriceValue" },
 	}
 	TSM.icons = {
 		{ side = "module", desc = "AuctionDB", slashCommand = "auctiondb", callback = "Config:Load", icon = "Interface\\Icons\\Inv_Misc_Platnumdisks" },
@@ -152,6 +164,7 @@ function TSM:ProcessAppData(itemID)
 			end
 			dayScans[day].avg = floor((dayScans[day].avg * dayScans[day].count + marketValue) / (dayScans[day].count + 1) + 0.5)
 			dayScans[day].count = dayScans[day].count + 1
+			dayScans[day].weekday = dayScans[day].weekday or tonumber(date("%w", scanTime))
 			if not dbData.lastScan or dbData.lastScan < scanTime then
 				dbData.lastScan = scanTime
 				dbData.minBuyout = minBuyout > 0 and minBuyout or nil
@@ -234,6 +247,7 @@ function TSM:GetTooltip(itemString, quantity)
 	if not strfind(itemString, "item:") then return end
 	local itemID = TSMAPI:GetItemID(itemString)
 	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
 	local text = {}
 	local moneyCoinsTooltip = TSMAPI:GetMoneyCoinsTooltip()
 	quantity = quantity or 1
@@ -276,6 +290,150 @@ function TSM:GetTooltip(itemString, quantity)
 						tinsert(text, { left = "  " .. L["Min Buyout:"], right = TSMAPI:FormatTextMoney(minBuyout, "|cffffffff", true) })
 					end
 				end
+			end
+		end
+	end
+
+	-- add predicted price info
+	if TSM.db.profile.predictedPriceTooltip then
+		local scans = TSM.data[itemID].scans
+		if scans then
+			local slope, predicted, numPoints = TSM.Data:CalculateTrend(scans)
+			if predicted and predicted > 0 and numPoints >= 2 then
+				local arrow = ""
+				if slope and slope > 0 then
+					arrow = " |cff00ff00^|r"  -- green up
+				elseif slope and slope < 0 then
+					arrow = " |cffff0000v|r"  -- red down
+				end
+				if moneyCoinsTooltip then
+					tinsert(text, { left = "  " .. L["Predicted Price:"], right = TSMAPI:FormatTextMoneyIcon(predicted, "|cffffffff", true) .. arrow })
+				else
+					tinsert(text, { left = "  " .. L["Predicted Price:"], right = TSMAPI:FormatTextMoney(predicted, "|cffffffff", true) .. arrow })
+				end
+			end
+		end
+	end
+
+	-- add trend info
+	if TSM.db.profile.trendTooltip then
+		local scans = TSM.data[itemID].scans
+		if scans then
+			local slope, _, numPoints = TSM.Data:CalculateTrend(scans)
+			if slope and numPoints >= 2 then
+				local marketValue = TSM.data[itemID].marketValue
+				if marketValue and marketValue > 0 then
+					local pctPerDay = (slope / marketValue) * 100
+					local trendColor
+					if pctPerDay > 1 then
+						trendColor = "|cff00ff00" -- green: rising
+					elseif pctPerDay < -1 then
+						trendColor = "|cffff0000" -- red: falling
+					else
+						trendColor = "|cffffff00" -- yellow: stable
+					end
+					tinsert(text, { left = "  " .. L["Trend:"], right = format("%s%+.1f%%/day|r", trendColor, pctPerDay) })
+				end
+			end
+		end
+	end
+
+	-- add volatility info
+	if TSM.db.profile.volatilityTooltip then
+		local scans = TSM.data[itemID].scans
+		if scans then
+			local volatility, numPoints = TSM.Data:CalculateVolatility(scans)
+			if volatility and numPoints >= 2 then
+				local volLabel, volColor
+				if volatility <= 10 then
+					volLabel = L["Low"]
+					volColor = "|cff00ff00"
+				elseif volatility <= 30 then
+					volLabel = L["Medium"]
+					volColor = "|cffffff00"
+				else
+					volLabel = L["High"]
+					volColor = "|cffff0000"
+				end
+				tinsert(text, { left = "  " .. L["Volatility:"], right = format("%s%s (CV: %d)|r", volColor, volLabel, volatility) })
+			end
+		end
+	end
+
+	-- add confidence info
+	if TSM.db.profile.confidenceTooltip then
+		local scans = TSM.data[itemID].scans
+		if scans then
+			local confidence = TSM.Data:CalculateConfidence(scans, TSM.data[itemID].lastScan)
+			if confidence then
+				local confLabel, confColor
+				if confidence >= 70 then
+					confLabel = L["High"]
+					confColor = "|cff00ff00"
+				elseif confidence >= 40 then
+					confLabel = L["Medium"]
+					confColor = "|cffffff00"
+				else
+					confLabel = L["Low"]
+					confColor = "|cffff0000"
+				end
+				tinsert(text, { left = "  " .. L["Confidence:"], right = format("%s%s (%d%%)|r", confColor, confLabel, confidence) })
+			end
+		end
+	end
+
+	-- add weekday price info
+	if TSM.db.profile.weekdayTooltip then
+		local scans = TSM.data[itemID].scans
+		if scans then
+			local today = TSM.Data:GetDay()
+			local todayWeekday = TSM.Data:GetWeekday(today)
+			local weekdayAvg, samples, overallAvg, deviationPct = TSM.Data:GetWeekdayPrice(scans, todayWeekday)
+			if weekdayAvg and samples > 0 then
+				local dayName = TSM.Data:GetWeekdayName(todayWeekday)
+				local devColor
+				if deviationPct > 5 then
+					devColor = "|cff00ff00"  -- green: above average
+				elseif deviationPct < -5 then
+					devColor = "|cffff0000"  -- red: below average
+				else
+					devColor = "|cffffff00"  -- yellow: near average
+				end
+				local rightText
+				if moneyCoinsTooltip then
+					rightText = TSMAPI:FormatTextMoneyIcon(weekdayAvg, "|cffffffff", true) .. format(" %s(%s %+.0f%%)|r", devColor, dayName, deviationPct)
+				else
+					rightText = TSMAPI:FormatTextMoney(weekdayAvg, "|cffffffff", true) .. format(" %s(%s %+.0f%%)|r", devColor, dayName, deviationPct)
+				end
+				tinsert(text, { left = "  " .. L["Weekday Price:"], right = rightText })
+			end
+		end
+	end
+
+	-- add smart price
+	if TSM.db.profile.smartPriceTooltip then
+		local scans = TSM.data[itemID].scans
+		local mv = TSM.data[itemID].marketValue
+		if scans and mv and mv > 0 then
+			local smartPrice, parts = TSM.Data:CalculateSmartPrice(scans, TSM.data[itemID].lastScan, mv)
+			if smartPrice then
+				local diff = smartPrice - mv
+				local diffPct = (diff / mv) * 100
+				local arrow, color
+				if diffPct > 2 then
+					arrow = "^"; color = "|cff00ff00"
+				elseif diffPct < -2 then
+					arrow = "v"; color = "|cffff0000"
+				else
+					arrow = "~"; color = "|cffffff00"
+				end
+				local rightText
+				if moneyCoinsTooltip then
+					rightText = TSMAPI:FormatTextMoneyIcon(smartPrice, "|cffffffff", true) .. format(" %s%s %+.0f%%|r", color, arrow, diffPct)
+				else
+					rightText = TSMAPI:FormatTextMoney(smartPrice, "|cffffffff", true) .. format(" %s%s %+.0f%%|r", color, arrow, diffPct)
+				end
+				tinsert(text, { left = "  " .. L["Smart Price:"], right = rightText })
 			end
 		end
 	end
@@ -374,8 +532,12 @@ local function encodeScans(scans)
 	local tbl, tbl2 = {}, {}
 	for day, data in pairs(scans) do
 		if type(data) == "table" and data.count and data.avg then
-			-- New method of encoding scans.
-			data = encode(data.avg).."@"..encode(data.count)
+			-- New method of encoding scans (with optional weekday tag).
+			local encoded = encode(data.avg).."@"..encode(data.count)
+			if data.weekday then
+				encoded = encoded .. "#" .. encode(data.weekday)
+			end
+			data = encoded
 		elseif type(data) == "table" then
 			-- Old method of encoding scans.
 			for i = 1, #data do
@@ -414,14 +576,24 @@ local function decodeScans(rope)
 				scans[day] = {}
 
 				if strfind(marketValueData, "@") then
-					-- New method of decoding scans.
-					local avg, count = ("@"):split(marketValueData)
+					-- New method of decoding scans (with optional weekday tag).
+					local avg, countAndWeekday = ("@"):split(marketValueData)
+					local count, weekday
+					if strfind(countAndWeekday, "#") then
+						local countStr, weekdayStr = ("#"):split(countAndWeekday)
+						count = decode(countStr)
+						weekday = decode(weekdayStr)
+					else
+						count = decode(countAndWeekday)
+					end
 					avg = decode(avg)
-					count = decode(count)
 					if avg ~= "~" and count ~= "~" then
 						if abs(currentDay - day) <= TSM.MAX_AVG_DAY then
 							scans[day].avg = avg
 							scans[day].count = count
+							if weekday then
+								scans[day].weekday = weekday
+							end
 						else
 							scans[day] = avg
 						end
@@ -550,4 +722,85 @@ function TSM:GetMinBuyout(itemID)
 	if not itemID or not TSM.data[itemID] then return end
 	TSM:DecodeItemData(itemID)
 	return TSM.data[itemID].minBuyout
+end
+
+function TSM:GetPredictedPrice(itemID)
+	if itemID and not tonumber(itemID) then
+		itemID = TSMAPI:GetItemID(itemID)
+	end
+	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
+	local scans = TSM.data[itemID].scans
+	if not scans then return end
+	local _, predicted = TSM.Data:CalculateTrend(scans)
+	return predicted and predicted > 0 and predicted or nil
+end
+
+function TSM:GetTrendValue(itemID)
+	if itemID and not tonumber(itemID) then
+		itemID = TSMAPI:GetItemID(itemID)
+	end
+	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
+	local scans = TSM.data[itemID].scans
+	if not scans then return end
+	local slope = TSM.Data:CalculateTrend(scans)
+	-- Return slope as absolute copper value (positive = rising, but price sources must be > 0)
+	if not slope then return end
+	-- Return the market value adjusted by the daily trend direction
+	local marketValue = TSM.data[itemID].marketValue or 0
+	if marketValue == 0 then return end
+	-- Encode as: marketValue + slope (clamped to > 0)
+	return max(1, floor(marketValue + slope + 0.5))
+end
+
+function TSM:GetVolatilityValue(itemID)
+	if itemID and not tonumber(itemID) then
+		itemID = TSMAPI:GetItemID(itemID)
+	end
+	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
+	local scans = TSM.data[itemID].scans
+	if not scans then return end
+	local volatility = TSM.Data:CalculateVolatility(scans)
+	-- Return as copper value so it works in price source system (1 = 1% CV)
+	return volatility and volatility > 0 and volatility or nil
+end
+
+function TSM:GetConfidenceValue(itemID)
+	if itemID and not tonumber(itemID) then
+		itemID = TSMAPI:GetItemID(itemID)
+	end
+	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
+	local scans = TSM.data[itemID].scans
+	if not scans then return end
+	local confidence = TSM.Data:CalculateConfidence(scans, TSM.data[itemID].lastScan)
+	-- Return as copper value so it works in price source system (1 = 1%)
+	return confidence and confidence > 0 and confidence or nil
+end
+
+function TSM:GetWeekdayValue(itemID)
+	if itemID and not tonumber(itemID) then
+		itemID = TSMAPI:GetItemID(itemID)
+	end
+	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
+	local scans = TSM.data[itemID].scans
+	if not scans then return end
+	local weekdayAvg = TSM.Data:GetWeekdayPrice(scans)
+	return weekdayAvg and weekdayAvg > 0 and weekdayAvg or nil
+end
+
+function TSM:GetSmartPriceValue(itemID)
+	if itemID and not tonumber(itemID) then
+		itemID = TSMAPI:GetItemID(itemID)
+	end
+	if not itemID or not TSM.data[itemID] then return end
+	TSM:DecodeItemData(itemID)
+	local scans = TSM.data[itemID].scans
+	local mv = TSM.data[itemID].marketValue
+	if not scans or not mv or mv == 0 then return end
+	local smartPrice = TSM.Data:CalculateSmartPrice(scans, TSM.data[itemID].lastScan, mv)
+	return smartPrice and smartPrice > 0 and smartPrice or nil
 end

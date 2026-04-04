@@ -13,10 +13,13 @@ local Data = TSM:NewModule("Data")
 -- locals to speed up function access
 local abs = abs
 local CopyTable = CopyTable
+local date = date
 local debugprofilestop = debugprofilestop
 local floor = floor
 local format = format
 local ipairs = ipairs
+local max = max
+local min = min
 local pairs = pairs
 local sqrt = sqrt
 local time = time
@@ -309,6 +312,7 @@ function Data:ProcessData(scanData, groupItems, verifyNewAlgorithm)
 				end
 				scanData[day].avg = floor((scanData[day].avg * scanData[day].count + marketValue) / (scanData[day].count + 1) + 0.5)
 				scanData[day].count = scanData[day].count + 1
+				scanData[day].weekday = scanData[day].weekday or tonumber(date("%w"))
 
 				-- Remember the item's scan date, cheapest buyout price on AH right now,
 				-- and how many items in total exist on AH (adds together all stacks).
@@ -666,4 +670,252 @@ function Data:CalculateMarketValue(data, hide_oldschool_warning)
 
 		return corrected_mean
 	end
+end
+
+
+-- =============================================================================
+-- Phase 1: Trend Detection, Volatility & Confidence
+-- Compute-on-demand functions (no extra storage needed).
+-- =============================================================================
+
+--- Get the weekday (0=Sun..6=Sat) for a given day number, using UTC.
+function Data:GetWeekday(day)
+	return tonumber(date("!%w", day * 60 * 60 * 24)) or 0
+end
+
+--- Extract a flat list of {daysAgo, value} pairs from scan history.
+-- Returns up to 15 entries (one per day), most recent first.
+-- @param scans The item's scans table (day-key → value or {avg,count}).
+-- @return dataPoints Array of {daysAgo=N, value=V}, numPoints
+function Data:GetScanDataPoints(scans)
+	if not scans then return {}, 0 end
+	local day = Data:GetDay()
+	local points = {}
+	for i = 0, 14 do
+		local entry = scans[day - i]
+		if entry then
+			local val
+			if type(entry) == "table" then
+				val = entry.avg
+			else
+				val = entry
+			end
+			if val and val > 0 then
+				points[#points + 1] = { daysAgo = i, value = val }
+			end
+		end
+	end
+	return points, #points
+end
+
+--- Calculate linear trend (slope) via least squares regression.
+-- @param scans The item's scans table.
+-- @return slope (copper per day, positive = rising), predictedPrice (next-day forecast), numPoints
+function Data:CalculateTrend(scans)
+	local points, n = Data:GetScanDataPoints(scans)
+	if n < 2 then return nil, nil, n end
+
+	-- x = daysAgo (inverted so that today = max x, oldest = 0)
+	-- This makes the slope positive when prices rise over time.
+	local sumX, sumY, sumXY, sumX2 = 0, 0, 0, 0
+	local maxDaysAgo = points[#points].daysAgo
+	for _, p in ipairs(points) do
+		local x = maxDaysAgo - p.daysAgo  -- 0 = oldest, maxDaysAgo = today
+		local y = p.value
+		sumX = sumX + x
+		sumY = sumY + y
+		sumXY = sumXY + (x * y)
+		sumX2 = sumX2 + (x * x)
+	end
+
+	local meanX = sumX / n
+	local meanY = sumY / n
+	local denominator = sumX2 - n * meanX * meanX
+
+	-- If all points are on the same day, can't compute trend.
+	if denominator == 0 then return 0, floor(meanY + 0.5), n end
+
+	local slope = (sumXY - n * meanX * meanY) / denominator
+	-- Predict tomorrow's price: y = meanY + slope * (maxDaysAgo + 1 - meanX)
+	local predicted = meanY + slope * (maxDaysAgo + 1 - meanX)
+	predicted = max(0, floor(predicted + 0.5))
+
+	return slope, predicted, n
+end
+
+--- Calculate volatility as coefficient of variation (CV).
+-- @param scans The item's scans table.
+-- @return volatility (0-100+ scale, lower = more stable), numPoints
+function Data:CalculateVolatility(scans)
+	local points, n = Data:GetScanDataPoints(scans)
+	if n < 2 then return nil, n end
+
+	-- Calculate mean
+	local sum = 0
+	for _, p in ipairs(points) do
+		sum = sum + p.value
+	end
+	local mean = sum / n
+
+	if mean == 0 then return 0, n end
+
+	-- Calculate standard deviation
+	local variance = 0
+	for _, p in ipairs(points) do
+		variance = variance + (p.value - mean) ^ 2
+	end
+	local stdDev = sqrt(variance / n)
+
+	-- CV as percentage
+	local cv = (stdDev / mean) * 100
+	return floor(cv + 0.5), n
+end
+
+--- Calculate a confidence score (0-100) based on scan count and recency.
+-- @param scans The item's scans table.
+-- @param lastScan Unix timestamp of last scan.
+-- @return confidence (0-100), numPoints
+function Data:CalculateConfidence(scans, lastScan)
+	local points, n = Data:GetScanDataPoints(scans)
+
+	-- Base confidence from number of data points (each day = +10, max 70 from count)
+	local countScore = min(70, n * 10)
+
+	-- Recency bonus (up to 30 points): how fresh is the newest data?
+	local recencyScore = 0
+	if lastScan and lastScan > 0 then
+		local age = time() - lastScan
+		if age < 3600 * 3 then
+			recencyScore = 30           -- < 3 hours: full freshness
+		elseif age < 3600 * 12 then
+			recencyScore = 20           -- < 12 hours: good
+		elseif age < 3600 * 24 then
+			recencyScore = 10           -- < 24 hours: stale
+		end
+		-- > 24 hours: 0 recency bonus
+	end
+
+	return min(100, countScore + recencyScore), n
+end
+
+
+-- =============================================================================
+-- Phase 3: Day-of-Week Cyclical Model
+-- Uses weekday metadata stamped in Phase 0 to detect weekly price patterns.
+-- =============================================================================
+
+local WEEKDAY_NAMES = { [0] = "Sun", [1] = "Mon", [2] = "Tue", [3] = "Wed", [4] = "Thu", [5] = "Fri", [6] = "Sat" }
+
+--- Calculate the average price for a specific weekday from scan history.
+-- Looks at all 15 days of history and buckets by weekday.
+-- @param scans The item's scans table.
+-- @param targetWeekday (0=Sun..6=Sat) or nil for today's weekday.
+-- @return weekdayAvg, weekdaySamples, overallAvg, deviationPct
+function Data:GetWeekdayPrice(scans, targetWeekday)
+	if not scans then return nil end
+	local day = Data:GetDay()
+	targetWeekday = targetWeekday or Data:GetWeekday(day)
+
+	-- Bucket all scan days by their weekday
+	local weekdayTotals = {}  -- [weekday] = {total, count}
+	local overallTotal, overallCount = 0, 0
+	for i = 0, 14 do
+		local scanDay = day - i
+		local entry = scans[scanDay]
+		if entry then
+			local val, weekday
+			if type(entry) == "table" then
+				val = entry.avg
+				weekday = entry.weekday
+			else
+				val = entry
+			end
+			-- Derive weekday from the day number if not stored
+			if not weekday then
+				weekday = Data:GetWeekday(scanDay)
+			end
+			if val and val > 0 then
+				if not weekdayTotals[weekday] then
+					weekdayTotals[weekday] = { total = 0, count = 0 }
+				end
+				weekdayTotals[weekday].total = weekdayTotals[weekday].total + val
+				weekdayTotals[weekday].count = weekdayTotals[weekday].count + 1
+				overallTotal = overallTotal + val
+				overallCount = overallCount + 1
+			end
+		end
+	end
+
+	if overallCount == 0 then return nil end
+	local overallAvg = overallTotal / overallCount
+
+	local bucket = weekdayTotals[targetWeekday]
+	if not bucket or bucket.count == 0 then
+		-- No data for this specific weekday yet, return overall average
+		return floor(overallAvg + 0.5), 0, floor(overallAvg + 0.5), 0
+	end
+
+	local weekdayAvg = floor(bucket.total / bucket.count + 0.5)
+	local deviationPct = ((weekdayAvg - overallAvg) / overallAvg) * 100
+
+	return weekdayAvg, bucket.count, floor(overallAvg + 0.5), deviationPct
+end
+
+--- Get the weekday name string.
+-- @param weekday (0=Sun..6=Sat)
+-- @return string like "Tue"
+function Data:GetWeekdayName(weekday)
+	return WEEKDAY_NAMES[weekday] or "?"
+end
+
+
+-- =============================================================================
+-- Phase 4: Smart Price — Composite Prediction
+-- Blends trend, weekday seasonality, and confidence into a single best-guess.
+--   SmartPrice = conf * (predicted + weekdayOffset) + (1-conf) * marketValue
+-- High confidence → trusts prediction + seasonal shift.
+-- Low confidence  → falls back toward plain market value.
+-- =============================================================================
+
+--- Calculate a composite smart price for an item.
+-- @param scans       The item's scans table.
+-- @param lastScan    Timestamp of the most recent scan.
+-- @param marketValue The item's current DBMarket value.
+-- @return smartPrice, components table, or nil
+function Data:CalculateSmartPrice(scans, lastScan, marketValue)
+	if not scans or not marketValue or marketValue == 0 then return nil end
+
+	-- 1. Trend-adjusted predicted price
+	local slope, predicted, numPoints = Data:CalculateTrend(scans)
+	if not predicted or predicted <= 0 then
+		predicted = marketValue
+		slope = 0
+	end
+
+	-- 2. Weekday seasonal offset
+	local weekdayOffset = 0
+	local day = Data:GetDay()
+	local todayWeekday = Data:GetWeekday(day)
+	local weekdayAvg, samples, overallAvg, deviationPct = Data:GetWeekdayPrice(scans, todayWeekday)
+	if weekdayAvg and samples >= 2 and overallAvg and overallAvg > 0 then
+		-- offset = how much today's weekday deviates from the overall average
+		weekdayOffset = weekdayAvg - overallAvg
+	end
+
+	-- 3. Confidence weight (0.0 – 1.0)
+	local confidence = Data:CalculateConfidence(scans, lastScan) or 0
+	local confWeight = confidence / 100
+
+	-- 4. Composite blend
+	local adjusted = predicted + weekdayOffset
+	local smartPrice = confWeight * adjusted + (1 - confWeight) * marketValue
+	smartPrice = max(1, floor(smartPrice + 0.5))
+
+	return smartPrice, {
+		predicted   = predicted,
+		slope       = slope or 0,
+		weekdayOff  = weekdayOffset,
+		confidence  = confidence,
+		marketValue = marketValue,
+	}
 end
