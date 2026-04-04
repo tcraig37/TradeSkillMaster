@@ -333,13 +333,26 @@ function GUI:DrawItemLookup(container, itemString, returnTab, returnSubTab)
 							type = "InteractiveLabel",
 							text = select(2, TSMAPI:GetSafeItemInfo(itemString)) or TSM.items[itemString].name,
 							fontObject = GameFontNormalLarge,
-							relativeWidth = 0.4,
+							relativeWidth = 0.3,
 							callback = function() SetItemRef("item:" .. itemID, itemID) end,
 							tooltip = itemID,
 						},
 						{
-							type = "Label",
-							relativeWidth = 0.1,
+							type = "Button",
+							text = TSM.db.realm.oneOffItems[itemString] and "Unmark One-off" or "Mark as One-off",
+							relativeWidth = 0.19,
+							callback = function()
+								if TSM.db.realm.oneOffItems[itemString] then
+									TSM.db.realm.oneOffItems[itemString] = nil
+									TSM:Print("Removed from one-off purchases: " .. (TSMAPI:GetSafeItemInfo(itemString) or itemString))
+								else
+									TSM.db.realm.oneOffItems[itemString] = true
+									TSM:Print("Marked as one-off purchase: " .. (TSMAPI:GetSafeItemInfo(itemString) or itemString))
+								end
+								private:HideScrollingTables()
+								GUI:DrawItemLookup(container, itemString, returnTab, returnSubTab)
+								container.children[1]:DoLayout()
+							end,
 						},
 						{
 							type = "Button",
@@ -1074,6 +1087,19 @@ function GUI:DrawOptions(container)
 							label = L["Display Money Transfers in Income/Expense/Summary"],
 							settingInfo = { TSM.db.realm, "displayTransfers" },
 							tooltip = L["If checked, Money Transfers will be included in income / expense and summary. Accounting will still track these if disabled but will not show them."],
+						},
+						{
+							type = "CheckBox",
+							label = "Exclude Self-Transfers (between your own characters)",
+							settingInfo = { TSM.db.realm, "excludeSelfTransfers" },
+							disabled = not TSM.db.realm.displayTransfers,
+							tooltip = "If checked, gold transfers between your own characters will be excluded from income, expense, and summary calculations. Transfers to/from other players will still be shown.",
+						},
+						{
+							type = "CheckBox",
+							label = "Exclude One-off Purchases from Summary/Reports",
+							settingInfo = { TSM.db.realm, "filterOneOffItems" },
+							tooltip = "If checked, items marked as one-off purchases (e.g. Nobles Deck) will be excluded from summary totals and item lists. You can mark items as one-off from the item detail page.",
 						},
 						{
 							type = "CheckBox",

@@ -563,6 +563,10 @@ function private:IsItemFiltered(itemString, filters)
 		return true
 	end
 	
+	if TSM.db.realm.filterOneOffItems and TSM.db.realm.oneOffItems[itemString] then
+		return true
+	end
+	
 	if filters.group then
 		local groupPath = TSMAPI:GetGroupPath(itemString)
 		if not groupPath or not strfind(groupPath, "^"..TSMAPI:StrEscape(filters.group)) then
@@ -579,6 +583,9 @@ function private:IsRecordFiltered(record, filters)
 		return true
 	end
 	if not TSM.db.realm.displayTransfers and record.key == "Transfer" then
+		return true
+	end
+	if TSM.db.realm.excludeSelfTransfers and record.key == "Transfer" and Data.playerListCache[record.otherPlayer] then
 		return true
 	end
 	if filters.time and floor(record.time/SECONDS_PER_DAY) < (floor(time()/SECONDS_PER_DAY) - filters.time) then
