@@ -14,6 +14,71 @@ local L = LibStub("AceLocale-3.0"):GetLocale("TradeSkillMaster_Crafting") -- loa
 
 local currentVisited = {}
 local cache = { time = 0 }
+
+-- Known daily-cooldown spell IDs. GetTradeSkillCooldown() only reports a CD
+-- while it is active, so scans that run when the CD is available miss it.
+local KNOWN_CD_SPELLS = {
+	-- Classic transmutes
+	[11479] = true,  -- Transmute: Iron to Gold
+	[11480] = true,  -- Transmute: Mithril to Truesilver
+	[17187] = true,  -- Transmute: Arcanite
+	[25146] = true,  -- Transmute: Elemental Fire
+	-- Classic elemental transmutes
+	[17559] = true,  -- Transmute: Air to Fire
+	[17560] = true,  -- Transmute: Fire to Earth
+	[17561] = true,  -- Transmute: Earth to Water
+	[17562] = true,  -- Transmute: Water to Air
+	[17563] = true,  -- Transmute: Undeath to Water
+	[17564] = true,  -- Transmute: Water to Undeath
+	[17565] = true,  -- Transmute: Life to Earth
+	[17566] = true,  -- Transmute: Earth to Life
+	-- TBC primal transmutes
+	[28566] = true,  -- Transmute: Primal Air to Fire
+	[28567] = true,  -- Transmute: Primal Earth to Water
+	[28568] = true,  -- Transmute: Primal Fire to Earth
+	[28569] = true,  -- Transmute: Primal Water to Air
+	[28580] = true,  -- Transmute: Primal Shadow to Water
+	[28581] = true,  -- Transmute: Primal Water to Shadow
+	[28582] = true,  -- Transmute: Primal Mana to Fire
+	[28583] = true,  -- Transmute: Primal Fire to Mana
+	[28584] = true,  -- Transmute: Primal Life to Earth
+	[28585] = true,  -- Transmute: Primal Earth to Life
+	[29688] = true,  -- Transmute: Primal Might
+	-- TBC meta gem transmutes
+	[32765] = true,  -- Transmute: Earthstorm Diamond
+	[32766] = true,  -- Transmute: Skyfire Diamond
+	-- WotLK eternal transmutes
+	[53771] = true,  -- Transmute: Eternal Life to Shadow
+	[53773] = true,  -- Transmute: Eternal Life to Fire
+	[53774] = true,  -- Transmute: Eternal Fire to Water
+	[53775] = true,  -- Transmute: Eternal Fire to Life
+	[53776] = true,  -- Transmute: Eternal Air to Water
+	[53777] = true,  -- Transmute: Eternal Air to Earth
+	[53779] = true,  -- Transmute: Eternal Shadow to Earth
+	[53780] = true,  -- Transmute: Eternal Shadow to Life
+	[53781] = true,  -- Transmute: Eternal Earth to Air
+	[53782] = true,  -- Transmute: Eternal Earth to Shadow
+	[53783] = true,  -- Transmute: Eternal Water to Air
+	[53784] = true,  -- Transmute: Eternal Water to Fire
+	[54020] = true,  -- Transmute: Eternal Might
+	-- WotLK meta gem transmutes
+	[57425] = true,  -- Transmute: Skyflare Diamond
+	[57427] = true,  -- Transmute: Earthsiege Diamond
+	-- WotLK misc transmutes
+	[60350] = true,  -- Transmute: Titanium
+	-- WotLK epic gem transmutes
+	[66658] = true,  -- Transmute: Ametrine
+	[66659] = true,  -- Transmute: Cardinal Ruby
+	[66660] = true,  -- Transmute: King's Amber
+	[66662] = true,  -- Transmute: Dreadstone
+	[66663] = true,  -- Transmute: Majestic Zircon
+	[66664] = true,  -- Transmute: Eye of Zul
+}
+
+local function HasCooldown(spellID)
+	local craft = TSM.db.realm.crafts[spellID]
+	return (craft and craft.hasCD) or KNOWN_CD_SPELLS[spellID]
+end
 function Cost:GetMatCost(itemString)
 	local mat = TSM.db.realm.mats[itemString]
 	if not mat then return end
@@ -66,7 +131,7 @@ function Cost:GetCraftCost(itemID)
 	for _, spellID in ipairs(spellIDs) do
 		local craft = TSM.db.realm.crafts[spellID]
 		local cost, costIsValid = 0, true
-		if #spellIDs >= 2 and TSM.db.global.ignoreCDCraftCost and TSM.db.realm.crafts[spellID].hasCD then
+		if #spellIDs >= 2 and TSM.db.global.ignoreCDCraftCost and HasCooldown(spellID) then
 			costIsValid = false
 		end
 		for matID, matQuantity in pairs(craft.mats) do
@@ -118,31 +183,34 @@ function Cost:GetLowestCraftPrices(itemString, intermediate)
 	if not spellIDs then return end
 	local lowestCost, cheapestSpellID
 	local soh = "item:76061:0:0:0:0:0:0" -- Spirit of Harmony
+	local hasValidSpell
 	for _, spellID in ipairs(spellIDs) do
 		if TSM.db.realm.crafts[spellID] then
-			if intermediate and (TSM.db.realm.crafts[spellID].mats[soh] or TSM.db.realm.crafts[spellID].hasCD) then
-				break
-			end --exclude spells using SOH or have cooldown from intermediate crafts
-			local cost = Cost:GetCraftCost(spellID)
-			if cost and (not lowestCost or cost < lowestCost) then
-				-- exclude spells with cooldown if option to ignore is enabled or more than one way to craft and not soulbound e.g. BoE
-				if not TSM.db.global.ignoreCDCraftCost then
-					if TSM.db.realm.crafts[spellID].hasCD then
-						if TSMAPI.SOULBOUND_MATS[itemString] or #spellIDs == 1 then
+			if not (intermediate and (TSM.db.realm.crafts[spellID].mats[soh] or HasCooldown(spellID))) then
+				hasValidSpell = true
+				local cost = Cost:GetCraftCost(spellID)
+				if cost and (not lowestCost or cost < lowestCost) then
+					-- exclude spells with cooldown if option to ignore is enabled or more than one way to craft and not soulbound e.g. BoE
+					if not TSM.db.global.ignoreCDCraftCost then
+						if HasCooldown(spellID) then
+							if TSMAPI.SOULBOUND_MATS[itemString] or #spellIDs == 1 then
+								lowestCost = cost
+								cheapestSpellID = spellID
+							end
+						else
 							lowestCost = cost
 							cheapestSpellID = spellID
 						end
-					else
+					elseif not HasCooldown(spellID) then
 						lowestCost = cost
 						cheapestSpellID = spellID
 					end
-				elseif not TSM.db.realm.crafts[spellID].hasCD then
-					lowestCost = cost
-					cheapestSpellID = spellID
 				end
-			end
+			end --exclude spells using SOH or with cooldown from intermediate crafts
 		end
 	end
+
+	if intermediate and not hasValidSpell then return end
 
 	if not lowestCost or not cheapestSpellID then return end
 	local profit, buyout

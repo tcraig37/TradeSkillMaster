@@ -10,6 +10,11 @@
 local TSM = select(2, ...)
 TSM = LibStub("AceAddon-3.0"):NewAddon(TSM, "TSM_Crafting", "AceEvent-3.0", "AceConsole-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("TradeSkillMaster_Crafting") -- loads the localization table
+local LEGACY_DEFAULT_MAT_COST_METHODS = {
+	["min(dbmarket, crafting, vendorbuy, convert(dbmarket))"] = true,
+	["min(dbmarket, craftingmat, vendorbuy, convert(dbmarket))"] = true,
+	["dbminbuyout"] = true,
+}
 
 
 -- default values for the savedDB
@@ -21,7 +26,7 @@ local savedDBDefaults = {
 		ignoreCharacters = {},
 		ignoreGuilds = {},
 		profitPercent = 0,
-		defaultMatCostMethod = "min(dbmarket, crafting, vendorbuy, convert(dbmarket))",
+		defaultMatCostMethod = nil,
 		defaultCraftPriceMethod = "dbminbuyout",
 		priceColumn = 1,
 		ignoreCDCraftCost = true,
@@ -29,6 +34,9 @@ local savedDBDefaults = {
 		frameQueueOpen = nil,
 		showingDefaultFrame = nil,
 		matsInTooltip = true,
+		matCostBase = "dbmarket",
+		matCostNoConvert = false,
+		matCostNoCDCraft = true,
 	},
 	realm = {
 		tradeSkills = {},
@@ -50,6 +58,13 @@ function TSM:OnEnable()
 
 	-- load the savedDB into TSM.db
 	TSM.db = LibStub:GetLibrary("AceDB-3.0"):New("TradeSkillMaster_CraftingDB", savedDBDefaults, true)
+	-- migrate legacy hand-typed mat cost methods to new checkbox-driven system
+	if TSM.db.global.defaultMatCostMethod and LEGACY_DEFAULT_MAT_COST_METHODS[TSM.db.global.defaultMatCostMethod] then
+		TSM.db.global.defaultMatCostMethod = nil
+	end
+	if not TSM.db.global.defaultMatCostMethod then
+		TSM:RebuildMatCostMethod()
+	end
 	TSM:UpdateCraftReverseLookup()
 	
 	-- register this module with TSM
@@ -152,6 +167,7 @@ function TSM:RegisterModule()
 	TSM.operations = { maxOperations = 1, callbackOptions = "Options:Load", callbackInfo = "GetOperationInfo" }
 	TSM.priceSources = {
 		{ key = "Crafting", label = L["Crafting Cost"], callback = "GetCraftingCost" },
+		{ key = "CraftingMat", label = L["Crafting Cost (No Cooldown Transmutes)"], callback = "GetCraftingMatSourceCost" },
 		{ key = "matPrice", label = L["Crafting Material Cost"], callback = "GetCraftingMatCost" },
 	}
 	TSM.moduleAPIs = {
@@ -327,6 +343,16 @@ function TSM:GetCraftingCost(link)
 	return TSM.db.realm.craftingCostCache[itemString]
 end
 
+function TSM:GetCraftingMatSourceCost(link)
+	link = select(2, TSMAPI:GetSafeItemInfo(link))
+	local itemString = TSMAPI:GetBaseItemString(link)
+	if not itemString then return end
+
+	TSM:UpdateCraftReverseLookup()
+	local _, cost = TSM.Cost:GetLowestCraftPrices(itemString, true)
+	return cost
+end
+
 function TSM:GetCraftingMatCost(link)
 	link = select(2, TSMAPI:GetSafeItemInfo(link))
 	local itemString = TSMAPI:GetBaseItemString(link)
@@ -346,6 +372,23 @@ function TSM:UpdateCraftReverseLookup()
 		TSM.craftReverseLookup[data.itemID] = TSM.craftReverseLookup[data.itemID] or {}
 		tinsert(TSM.craftReverseLookup[data.itemID], spellID)
 	end
+end
+
+-- Builds the defaultMatCostMethod string from the checkbox/dropdown settings.
+-- Called on load and whenever a mat-cost UI control changes.
+function TSM:RebuildMatCostMethod()
+	local base = TSM.db.global.matCostBase or "dbmarket"
+	local parts = { base }
+	if not TSM.db.global.matCostNoCDCraft then
+		tinsert(parts, "crafting")
+	else
+		tinsert(parts, "craftingmat")
+	end
+	tinsert(parts, "vendorbuy")
+	if not TSM.db.global.matCostNoConvert then
+		tinsert(parts, "convert(" .. base .. ")")
+	end
+	TSM.db.global.defaultMatCostMethod = "min(" .. table.concat(parts, ", ") .. ")"
 end
 
 function TSM:GetCustomPrice(priceMethod, itemString)

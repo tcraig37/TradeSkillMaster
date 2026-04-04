@@ -389,12 +389,54 @@ function Options:LoadGeneralSettings(container)
 					title = L["Default Price Settings"],
 					children = {
 						{
+							type = "Dropdown",
+							label = L["Material Price Base"],
+							list = { ["dbmarket"] = L["Market Value (dbmarket)"], ["dbminbuyout"] = L["Min Buyout (dbminbuyout)"] },
+							value = TSM.db.global.matCostBase or "dbmarket",
+							relativeWidth = 0.49,
+							callback = function(_, _, value)
+								TSM.db.global.matCostBase = value
+								TSM:RebuildMatCostMethod()
+								TSM.db.realm.craftingCostCache = {}
+							end,
+							tooltip = L["Choose the base price source for material costs. Market Value uses the weighted average market price. Min Buyout uses the cheapest auction currently listed."],
+						},
+						{
+							type = "Label",
+							relativeWidth = 0.02,
+						},
+						{
+							type = "CheckBox",
+							label = L["Exclude Conversions (Prospect/Mill/DE)"],
+							settingInfo = { TSM.db.global, "matCostNoConvert" },
+							relativeWidth = 0.49,
+							callback = function(_, _, value)
+								TSM:RebuildMatCostMethod()
+								TSM.db.realm.craftingCostCache = {}
+							end,
+							tooltip = L["If checked, prospecting/milling/disenchant conversions will NOT be used to calculate material prices. Enable this if gems or pigments are showing incorrect prices based on ore/herb prospecting rates instead of their actual AH value."],
+						},
+						{
+							type = "CheckBox",
+							label = L["Exclude Cooldown Transmutes from Mat Cost"],
+							settingInfo = { TSM.db.global, "matCostNoCDCraft" },
+							relativeWidth = 0.49,
+							callback = function(_, _, value)
+								TSM:RebuildMatCostMethod()
+								TSM.db.realm.craftingCostCache = {}
+							end,
+							tooltip = L["If checked, daily-cooldown transmutes (e.g. Transmute: Eternal Air from Eternal Earth) will NOT reduce material prices. Enable this to stop Eternals and similar items from being priced at the transmute cost of a different Eternal."],
+						},
+						{
+							type = "Spacer"
+						},
+						{
 							type = "EditBox",
 							label = L["Default Material Cost Method"],
 							settingInfo = {TSM.db.global, "defaultMatCostMethod"},
 							relativeWidth = 1,
 							acceptCustom = true,
-							tooltip = L["This is the default method Crafting will use for determining material cost."],
+							tooltip = L["This is the default method Crafting will use for determining material cost. This is auto-generated from the options above, but you can also type a custom formula here."],
 						},
 						{
 							type = "EditBox",
